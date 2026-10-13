@@ -1,0 +1,17 @@
+{
+  "name": "teatime-order-system",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "文化祭喫茶店のローカル注文・受付番号管理",
+  "engines": { "node": ">=24.14.0 <25" },
+  "scripts": {
+    "start": "node server.mjs --local",
+    "start:lan": "node server.mjs --lan",
+    "start:cashier": "node server.mjs --cashier",
+    "start:kitchen": "node server.mjs --kitchen",
+    "preview": "node server.mjs --preview",
+    "test": "node --test",
+    "check": "node --check server.mjs && node --check lib/store.mjs && node --check lib/catalog.mjs && node --check public/app.js && node --check public/display.js && node --check public/audio.js"
+  }
+}
