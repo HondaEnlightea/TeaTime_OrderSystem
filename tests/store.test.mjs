@@ -1,3 +1,4 @@
+import {templateCatalog} from '../lib/catalog.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -7,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { createStore } from '../lib/store.mjs';
 import { DatabaseSync } from 'node:sqlite';
 
-function fixture(t) { const s=createStore(':memory:');t.after(()=>s.close());return s; }
+function fixture(t) { const s=createStore(':memory:', {catalog:templateCatalog()});t.after(()=>s.close());return s; }
 function input(s,override={}) { return {requestId:randomUUID(),sessionId:s.currentSession().id,menuRevision:Number(s.getSetting('menuRevision')),items:[{productId:'black-01',quantity:2},{productId:'green-01',quantity:1}],tendered:1500,note:'ミルクは別添え',...override}; }
 
 test('登録→完成→提供済み。正確な金額・状態・履歴・公開情報',t=>{
@@ -94,10 +95,10 @@ test('再起動・オンラインバックアップからの復元で注文・�
   const directory=mkdtempSync(join(tmpdir(),'teatime-test-'));
   t.after(()=>{assert.ok(resolve(directory).startsWith(resolve(tmpdir())+sep+'teatime-test-'));rmSync(directory,{recursive:true,force:true});});
   const file=join(directory,'main.sqlite'),backup=join(directory,'backup.sqlite');
-  let s=createStore(file);const payload=input(s),o=s.createOrder(payload),consumer=randomUUID();
+  let s=createStore(file, {catalog:templateCatalog()});const payload=input(s),o=s.createOrder(payload),consumer=randomUUID();
   s.transition(o.id,'waiting','ready');s.acquireAudio(consumer);const call=s.claimCall(consumer);s.backup(backup);s.close();
-  s=createStore(file);assert.equal(s.createOrder(payload).id,o.id);assert.equal(s.order(o.id).status,'ready');assert.equal(s.claimCall(consumer),null);assert.equal(s.history(o.id).length,2);s.close();
-  s=createStore(backup);assert.equal(s.order(o.id).total,1200);assert.equal(s.db.prepare('PRAGMA integrity_check').get().integrity_check,'ok');s.setting('audioExpires','0');assert.equal(s.state().audio.failed[0].id,call.id);s.close();
+  s=createStore(file, {catalog:templateCatalog()});assert.equal(s.createOrder(payload).id,o.id);assert.equal(s.order(o.id).status,'ready');assert.equal(s.claimCall(consumer),null);assert.equal(s.history(o.id).length,2);s.close();
+  s=createStore(backup, {catalog:templateCatalog()});assert.equal(s.order(o.id).total,1200);assert.equal(s.db.prepare('PRAGMA integrity_check').get().integrity_check,'ok');s.setting('audioExpires','0');assert.equal(s.state().audio.failed[0].id,call.id);s.close();
 });
 test('30枠を3茶種に分け、基本料金と有料オプションを明細ごとに保存する',t=>{
   const s=fixture(t);assert.equal(s.menu().length,30);
@@ -124,13 +125,64 @@ test('独立キッチンは紙の番号を保持し、再送と既存番号の�
 test('旧DBを移行しても既存明細・金額・状態・履歴・番号を保つ',t=>{
   const directory=mkdtempSync(join(tmpdir(),'teatime-test-')),file=join(directory,'legacy.sqlite');
   t.after(()=>{assert.ok(resolve(directory).startsWith(resolve(tmpdir())+sep+'teatime-test-'));rmSync(directory,{recursive:true,force:true});});
-  let s=createStore(file);
+  let s=createStore(file, {catalog:templateCatalog()});
   s.saveMenu({revision:1,products:[['tea','紅茶',300,'ドリンク'],['milk-tea','ミルクティー',350,'ドリンク'],['coffee','コーヒー',300,'ドリンク'],['scone','スコーン',250,'フード'],['cake','ケーキ',400,'フード']].map(([id,name,price,category])=>({id,name,price,category,active:true}))});
   const payload=input(s,{items:[{productId:'tea',quantity:2},{productId:'scone',quantity:1}],tendered:1000}),o=s.createOrder(payload);s.transition(o.id,'waiting','ready');s.close();
   const db=new DatabaseSync(file);db.exec(`ALTER TABLE order_items RENAME TO items_new;
     CREATE TABLE order_items(order_id TEXT NOT NULL REFERENCES orders(id),product_id TEXT NOT NULL,name TEXT NOT NULL,price INTEGER NOT NULL,quantity INTEGER NOT NULL,PRIMARY KEY(order_id,product_id));
     INSERT INTO order_items SELECT order_id,product_id,name,price,quantity FROM items_new;DROP TABLE items_new;
     ALTER TABLE orders DROP COLUMN source;ALTER TABLE orders DROP COLUMN fulfillment;`);db.close();
-  s=createStore(file);try{const saved=s.order(o.id);assert.equal(saved.total,850);assert.equal(saved.status,'ready');assert.equal(saved.items[0].ice,null);assert.equal(saved.items[0].unit_price,300);assert.equal(s.menu().length,30);assert.equal(s.createOrder(payload).id,o.id);assert.equal(s.currentSession().next_number,2);assert.equal(s.history(o.id).length,2);assert.equal(s.db.prepare('PRAGMA integrity_check').get().integrity_check,'ok');}finally{s.close();}
+  s=createStore(file, {catalog:templateCatalog()});try{const saved=s.order(o.id);assert.equal(saved.total,850);assert.equal(saved.status,'ready');assert.equal(saved.items[0].ice,null);assert.equal(saved.items[0].unit_price,300);assert.equal(s.menu().length,30);assert.equal(s.createOrder(payload).id,o.id);assert.equal(s.currentSession().next_number,2);assert.equal(s.history(o.id).length,2);assert.equal(s.db.prepare('PRAGMA integrity_check').get().integrity_check,'ok');}finally{s.close();}
 });
 
+test('茶葉説明・新規メニュー・売り切れを保存し、旧クライアント更新でも説明と過去の会計を保つ',t=>{
+  const s=fixture(t),o=s.createOrder(input(s));
+  const products=s.menu().map(p=>({...p,description:'香りの説明\nミルクがおすすめ。',...(p.id==='black-01'?{active:false,price:600}:{})}));
+  products.push({id:'new-tea',name:'新しい紅茶',category:'紅茶',price:500,active:true,description:'すっきりした味。'});
+  s.saveMenu({revision:1,products});
+  assert.equal(s.menu().length,31);assert.equal(s.menu().find(p=>p.id==='new-tea').description,'すっきりした味。');
+  assert.throws(()=>s.createOrder(input(s)),/販売/);
+  assert.equal(s.order(o.id).total,1200);
+  const withoutDescription=s.menu().map(({description,...p})=>p);s.saveMenu({revision:2,products:withoutDescription});
+  assert.equal(s.menu().find(p=>p.id==='black-01').description,'香りの説明\nミルクがおすすめ。');
+  assert.throws(()=>s.saveMenu({revision:3,products:s.menu().map(p=>({...p,description:'あ'.repeat(2001)}))}),/2000/);
+  assert.equal(Number(s.getSetting('menuRevision')),3);
+  assert.throws(()=>s.saveMenu({revision:2,products:s.menu()}),/別のスタッフ/);
+});
+function reservation(s,terminalId='terminal-test-0001'){
+  const state=s.state();return s.reserveNumbers({requestId:randomUUID(),terminalId,serverId:state.serverId,sessionId:state.currentSessionId,menuRevision:state.menuRevision});
+}
+function offlineOrder(r,number=r.start){return {requestId:randomUUID(),reservationId:r.id,terminalId:r.terminalId,serverId:r.serverId,sessionId:r.sessionId,menuRevision:r.menuRevision,number,acceptedAt:new Date().toISOString(),quotedTotal:500,items:[{productId:'black-01',quantity:1,ice:true,milk:true}],tendered:1000,note:'切断中の受付'};}
+test('予備番号は再送可能・複数端末と通常採番で重複しない。保存時の料金で切断後の会計を検証',t=>{
+  const s=fixture(t),state=s.state(),request={requestId:randomUUID(),terminalId:'terminal-test-0001',serverId:state.serverId,sessionId:state.currentSessionId,menuRevision:state.menuRevision};
+  const a=s.reserveNumbers(request),retry=s.reserveNumbers(request),b=reservation(s,'terminal-test-0002');
+  assert.equal(a.id,retry.id);assert.deepEqual([a.start,a.end,b.start,b.end],[1,50,51,100]);
+  assert.equal(s.state().totals.orders,0);assert.equal(s.createOrder(input(s)).number,101);
+  s.saveMenu({revision:1,products:s.menu().map(p=>({...p,price:600,active:false}))});
+  const payload=offlineOrder(a),sale=s.createOrder(payload);assert.equal(sale.total,500);assert.equal(sale.number,1);assert.equal(s.createOrder(payload).id,sale.id);
+  assert.throws(()=>s.createOrder({...offlineOrder(a,2),quotedTotal:1}),/会計金額/);
+  assert.throws(()=>s.createOrder({...offlineOrder(a,2),terminalId:b.terminalId}),/予備番号/);
+  assert.throws(()=>s.createOrder(offlineOrder(a,51)),/範囲/);
+  assert.throws(()=>s.createOrder({...payload,note:'別内容'}),/内容を変更/);
+  assert.equal(s.currentSession().next_number,102);
+});
+test('LANの紙番号を先に完成・提供しても会計同期で同じ注文・状態・音声履歴を維持する',t=>{
+  const s=fixture(t),r=reservation(s),paperInput={requestId:randomUUID(),sessionId:r.sessionId,number:r.start,note:'紙の内容'},paper=s.createPaperOrder(paperInput);
+  s.transition(paper.id,'waiting','ready');s.transition(paper.id,'ready','served');
+  const beforeCalls=s.db.prepare('SELECT COUNT(*) AS n FROM calls').get().n;
+  const payload=offlineOrder(r),sale=s.createOrder(payload);
+  assert.equal(sale.id,paper.id);assert.equal(sale.status,'served');assert.equal(sale.source,'cashier');assert.equal(sale.total,500);
+  assert.equal(s.createOrder(payload).id,paper.id);assert.equal(s.createPaperOrder(paperInput).id,paper.id);
+  assert.equal(s.state().totals.orders,1);assert.equal(s.state().totals.revenue,500);assert.equal(s.state().totals.cups,1);
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM calls').get().n,beforeCalls);
+  assert.deepEqual(s.history(paper.id).map(h=>h.action),['registered','ready','served','accounted']);
+  const refund={requestId:randomUUID(),id:paper.id,terminalId:r.terminalId,serverId:r.serverId,reason:'切断中に返金済み'};
+  s.cancelReserved(refund);s.cancelReserved(refund);assert.equal(s.state().totals.revenue,0);assert.equal(s.history(paper.id).filter(h=>h.action==='cancelled').length,1);
+});
+test('予備番号は明示終了まで営業回切り替えを防ぎ、終了後の再利用を拒否する',t=>{
+  const s=fixture(t),r=reservation(s);
+  assert.throws(()=>s.newSession({previousId:r.sessionId,name:'翌日'}),/予備番号/);
+  s.closeReservation({id:r.id,terminalId:r.terminalId,serverId:r.serverId});
+  assert.throws(()=>s.createOrder(offlineOrder(r)),/予備番号/);
+  const next=s.newSession({previousId:r.sessionId,name:'翌日'});assert.notEqual(next.id,r.sessionId);
+});

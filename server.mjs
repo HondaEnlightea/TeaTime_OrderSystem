@@ -1,34 +1,43 @@
 import http from 'node:http';
-import { readFileSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
+import { readFileSync, mkdirSync, readdirSync, unlinkSync, existsSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { networkInterfaces } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
 import { createStore, AppError } from './lib/store.mjs';
+import { summaryCsvRows,detailCsvRows,csvText } from './lib/reports.mjs';
+import { startupMessages } from './lib/startup.mjs';
+import {initialCatalog} from './lib/catalog.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const ASSETS = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']], ['/cashier',['index.html','text/html; charset=utf-8']],
   ['/kitchen',['index.html','text/html; charset=utf-8']], ['/sales',['index.html','text/html; charset=utf-8']],
   ['/settings',['index.html','text/html; charset=utf-8']], ['/display',['index.html','text/html; charset=utf-8']],
+  ['/history',['index.html','text/html; charset=utf-8']], ['/menu',['index.html','text/html; charset=utf-8']], ['/staff-menu',['index.html','text/html; charset=utf-8']],
   ['/app.js',['app.js','text/javascript; charset=utf-8']], ['/style.css',['style.css','text/css; charset=utf-8']],
   ['/audio.js',['audio.js','text/javascript; charset=utf-8']],
   ['/display.js',['display.js','text/javascript; charset=utf-8']],
+  ['/cashier-admin.js',['cashier-admin.js','text/javascript; charset=utf-8']],
+  ['/cart.js',['cart.js','text/javascript; charset=utf-8']],
+  ['/offline.js',['offline.js','text/javascript; charset=utf-8']], ['/reports.js',['../lib/reports.mjs','text/javascript; charset=utf-8']],
+  ['/client-reset.js',['client-reset.js','text/javascript; charset=utf-8']],
   ['/favicon.svg',['favicon.svg','image/svg+xml']]
 ]);
 function assert(condition, message, status=400) { if (!condition) throw new AppError(message,status); }
-function csvCell(value) {
-  let s = String(value ?? '');
-  if (/^[\s]*[=+@-]/.test(s)) s = `'${s}`;
-  return `"${s.replaceAll('"','""')}"`;
-}
 
 export function createApplication(options = {}) {
   const mode=options.mode??'cashier';
   assert(['shared','cashier','kitchen'].includes(mode),'運用モードが不正です。');
   const database = options.database ?? resolve(root,mode==='shared'?'data/teatime.sqlite':`data/${mode}.sqlite`);
-  const store = createStore(database);
+  const store = createStore(database,{catalog:options.catalog});
+  const resetManifest=resolve(root,'data/test-reset.json');
+  if(database!==':memory:'&&dirname(resolve(database))===resolve(root,'data')&&existsSync(resetManifest)){
+    const reset=JSON.parse(readFileSync(resetManifest,'utf8'));
+    assert(typeof reset.token==='string'&&/^[a-f0-9-]{36}$/.test(reset.token),'テスト初期化の記録が不正です。');
+    store.setting('clientResetToken',reset.token);
+  }
   store.setting('audioExpires','0'); // The display explicitly restarts its audio lease after a server restart.
   const allowedHosts = new Set(['localhost','127.0.0.1','[::1]',...Object.values(networkInterfaces()).flat().filter(Boolean).map(a=>a.address),...(options.allowedHosts ?? [])]);
   const backupDir = options.backupDir ?? resolve(root,`backups/${mode}`);
@@ -50,10 +59,10 @@ export function createApplication(options = {}) {
     res.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors ${options.preview?"'self'":"'none'"}; form-action 'self'`);
   }
   function json(res,status,body) { headers(res,'application/json; charset=utf-8'); res.writeHead(status); res.end(JSON.stringify(body)); }
-  async function body(req) {
+  async function body(req,limit=65536) {
     assert((req.headers['content-type'] ?? '').split(';')[0] === 'application/json','JSON形式で送信してください。',415);
     let size=0, chunks=[];
-    for await (const chunk of req) { size+=chunk.length; assert(size<=65536,'送信内容が大きすぎます。',413); chunks.push(chunk); }
+    for await (const chunk of req) { size+=chunk.length; assert(size<=limit,'送信内容が大きすぎます。',413); chunks.push(chunk); }
     try {
       const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       assert(input && typeof input==='object' && !Array.isArray(input),'送信内容が不正です。');
@@ -68,7 +77,7 @@ export function createApplication(options = {}) {
       const path=url.pathname;
       // Independent stations expose only their own workflow; the customer screen belongs to the kitchen.
       const stationRoute=mode==='cashier'?'/cashier':'/kitchen';
-      if(req.method==='GET'&&mode!=='shared'&&(path==='/'||(mode==='kitchen'&&path==='/cashier')||(mode==='cashier'&&['/kitchen','/display'].includes(path)))){
+      if(req.method==='GET'&&mode!=='shared'&&(path==='/'||(mode==='kitchen'&&['/cashier','/menu','/staff-menu'].includes(path))||(mode==='cashier'&&['/kitchen','/display'].includes(path)))){
         headers(res,'text/plain; charset=utf-8');res.writeHead(302,{Location:stationRoute});res.end();return;
       }
       if (options.preview && req.method==='GET' && ['/responsive-check','/responsive-check.css'].includes(path)) {
@@ -79,12 +88,19 @@ export function createApplication(options = {}) {
         const [file,type] = ASSETS.get(path); headers(res,type); res.end(readFileSync(join(root,'public',file))); return;
       }
       if (req.method === 'GET' && path === '/api/health') { json(res,200,{ok:true}); return; }
+      if(req.method==='GET'&&path==='/api/menu/default'){assert(mode!=='kitchen','メニューの編集は会計端末で行ってください。',409);json(res,200,initialCatalog());return;}
+      if(req.method==='GET'&&path==='/portal'){
+        headers(res,'text/html; charset=utf-8');
+        const destinations=mode==='shared'?[['/cashier','注文・会計へ'],['/kitchen','キッチン・お渡しへ'],['/display?setup=1','番号表示・音声準備へ']]:mode==='cashier'?[['/cashier','注文・会計へ']]:[['/kitchen','キッチン・お渡しへ'],['/display?setup=1','番号表示・音声準備へ']];
+        res.end(`<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TeaTime 端末用入口</title><link rel="stylesheet" href="/style.css"></head><body><main class="connection-page"><section class="connection-card"><h1>端末用入口</h1><p>この端末で使う画面を選んでください。</p><p class="connection-success">接続できました</p><p class="hint">${mode==='shared'?'親機の注文・提供状況を共有します。音声は番号表示用PCで開始してください。':'独立ローカルで起動中です。別端末との連携にはLAN起動を使ってください。'}</p><nav class="connection-actions" aria-label="使う画面を選択">${destinations.map(([path,label],i)=>`<a class="button ${i===0?'primary ':''}wide" href="${path}">${label}</a>`).join('')}</nav><p class="note">接続確認 ${new Date().toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}<br>入口を開くだけでは注文や売り上げは変更されません。</p><a class="button wide" href="/portal">接続を再確認</a></section></main></body></html>`);return;
+      }
       if (req.method === 'GET' && path === '/api/public') { json(res,200,store.publicState()); return; }
       if (req.method === 'POST') {
         assert(req.headers.origin === url.origin,'同じ画面から操作してください。',403);
-        const input = await body(req);
-        if (path === '/api/orders') { assert(mode!=='kitchen','独立キッチンでは会計登録できません。',409);json(res,201,store.createOrder(input,{fulfillment:mode!=='cashier'})); return; }
-        if (path === '/api/paper-orders') { assert(mode==='kitchen','注文票の手入力は独立キッチンで使用してください。',409);json(res,201,store.createPaperOrder(input));return; }
+        const input = await body(req,path==='/api/menu'?400*1024:65536);
+        if(path.startsWith('/api/offline/')){assert(mode==='shared','予備番号はLAN連携で利用します。',409);if(path==='/api/offline/reserve'){json(res,201,store.reserveNumbers(input));return;}if(path==='/api/offline/close'){json(res,200,store.closeReservation(input));return;}if(path==='/api/offline/cancel'){json(res,200,store.cancelReserved(input));return;}}
+        if (path === '/api/orders') { assert(!input.reservationId||mode==='shared','予備番号はLAN連携で利用します。',409);assert(mode!=='kitchen','独立キッチンでは会計登録できません。',409);json(res,201,store.createOrder(input,{fulfillment:mode!=='cashier'})); return; }
+        if (path === '/api/paper-orders') { assert(mode!=='cashier','注文票の手入力はキッチンで使用してください。',409);json(res,201,store.createPaperOrder(input));return; }
         const statusMatch = path.match(/^\/api\/orders\/([a-zA-Z0-9-]+)\/(status|recall)$/);
         if (statusMatch) {
           const result = statusMatch[2]==='status' ? store.transition(statusMatch[1],input.expected,input.status,input.reason) : store.recall(statusMatch[1],input.requestId);
@@ -105,11 +121,15 @@ export function createApplication(options = {}) {
         if (historyMatch) { json(res,200,store.history(historyMatch[1])); return; }
         if (path === '/api/export') {
           const state=store.state(url.searchParams.get('session') || undefined);
-          const rows=[['営業回','受付番号','状態','受付時刻','更新時刻','茶葉','基本価格','氷','ミルク','氷料金','ミルク料金','単価合計','数量','商品小計','注文合計','お預かり','お釣り','備考']];
-          const labels={waiting:'待ち',ready:'提供可能',served:'提供済み',cancelled:'取消・返金'};
-          state.orders.forEach(o=>o.items.forEach(i=>rows.push([state.session.name,o.label,!o.fulfillment&&o.status!=='cancelled'?'会計登録済み':labels[o.status],o.created_at,o.updated_at,i.name,i.price,i.ice===null?'未記録':i.ice?'あり':'なし',i.milk===null?'未記録':i.milk?'あり':'なし',i.ice_price,i.milk_price,i.unit_price,i.quantity,i.unit_price*i.quantity,o.total,o.tendered,o.change,o.note])));
+          const kind=url.searchParams.get('kind');
+          if(kind){
+            assert(['menu-sales','cup-sales'].includes(kind),'集計の種類が不正です。');
+            const rows=summaryCsvRows(state,kind);headers(res,'text/csv; charset=utf-8');res.setHeader('Content-Disposition',`attachment; filename="teatime-${kind}.csv"`);
+            res.end(csvText(rows));return;
+          }
+          const rows=detailCsvRows(state);
           headers(res,'text/csv; charset=utf-8'); res.setHeader('Content-Disposition','attachment; filename="teatime-sales.csv"');
-          res.end('\uFEFF'+rows.map(row=>row.map(csvCell).join(',')).join('\r\n')); return;
+          res.end(csvText(rows)); return;
         }
       }
       throw new AppError('ページが見つかりません。',404);
@@ -153,7 +173,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         const answer=(await prompt.question('1 または 2 を入力して Enter：',{signal:inputClosed.signal})).trim();
         if(answer==='1')mode='cashier';else if(answer==='2')mode='kitchen';else console.log('1（会計）か2（キッチン）を選んでください。');
       }
-    }catch{console.error('用途を選択できません。start-cashier.cmd または start-kitchen.cmd で起動してください。');process.exitCode=1;}
+    }catch{console.error('用途を選択できません。node server.mjs --cashier または node server.mjs --kitchen で起動してください。');process.exitCode=1;}
     finally{prompt.close();}
     if(!mode)process.exit(1);
   }
@@ -165,15 +185,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   app.server.on('error',e=>{console.error(e.code==='EADDRINUSE'?'ポートが使用中です。別の起動ウィンドウを確認してください。':e.message); process.exit(1);});
   app.server.listen(port,host,()=>{
     const listeningPort=app.server.address().port;
-    console.log(`TeaTime ${mode==='kitchen'?'独立キッチン':mode==='cashier'?'独立会計':'連携'}: http://127.0.0.1:${listeningPort}/${mode==='kitchen'?'kitchen':'cashier'}`);
-    console.log('PIN・ログインは不要です。上のURLをブラウザで開いてください。');
-    if(mode==='cashier')console.log('このPCは会計専用です。発行した番号を注文票に記入して、キッチンへ渡してください。');
-    if(mode==='kitchen')console.log('このPCはキッチン専用です。/kitchen で注文票の受付番号を手入力してください。');
+    for(const line of startupMessages({mode,port:listeningPort,interfaces:networkInterfaces()}))console.log(line);
     if(preview)console.log('練習用プレビュー。実機相当の390px確認: /responsive-check。本番はnpm start。');
-    if (host==='0.0.0.0') for (const a of Object.values(networkInterfaces()).flat().filter(Boolean)) {
-      if (a.family==='IPv4' && !a.internal) console.log(`他端末の接続先: http://${a.address}:${listeningPort}/cashier`);
-    }
-    if(mode!=='cashier')console.log('番号表示は /display、音声準備は /display?setup=1。');
     console.log('停止: Ctrl+C');
   });
   let stopping=false;

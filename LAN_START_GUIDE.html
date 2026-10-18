@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TeaTime｜別のPCをLAN親機にする</title>
+  <style>
+    :root { color-scheme: light; --ink:#302a26; --muted:#655e57; --line:#ddd5cb; --accent:#754532; --paper:#fffdf9; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#f3eee7; color:var(--ink); font:16px/1.8 system-ui,"Yu Gothic",Meiryo,sans-serif; }
+    main { max-width:900px; margin:auto; padding:40px 24px 64px; }
+    header { margin-bottom:30px; }
+    .brand { margin:0 0 10px; color:var(--muted); font-size:14px; }
+    h1 { font-size:clamp(26px,5vw,36px); line-height:1.5; margin:0 0 12px; }
+    h2 { margin:0 0 16px; font-size:22px; line-height:1.6; }
+    h3 { font-size:17px; margin:22px 0 8px; }
+    p { margin:10px 0; }
+    section { background:var(--paper); padding:28px; border:1px solid var(--line); border-radius:10px; margin:18px 0; }
+    .number { display:inline-grid; place-items:center; background:var(--accent); color:white; min-width:34px; height:34px; border-radius:50%; font-size:18px; margin-right:10px; }
+    .note { color:var(--muted); font-size:14px; }
+    .intro { padding-left:16px; border-left:3px solid var(--accent); }
+    a { color:var(--accent); text-underline-offset:3px; overflow-wrap:anywhere; }
+    .actions { display:flex; gap:12px; flex-wrap:wrap; margin:18px 0 10px; }
+    .button,button { appearance:none; display:inline-flex; align-items:center; justify-content:center; min-height:46px; padding:10px 16px; border:1px solid var(--accent); border-radius:6px; background:var(--paper); color:var(--accent); font-size:15px; line-height:1.5; font-weight:600; font-family:inherit; cursor:pointer; text-decoration:none; }
+    .primary { background:var(--accent); color:white; }
+    a:focus-visible,button:focus-visible,textarea:focus-visible,summary:focus-visible { outline:3px solid #a26414; outline-offset:3px; }
+    ol,ul { padding-left:24px; }
+    li { margin:8px 0; }
+    code,kbd { background:#eee8df; padding:2px 6px; border-radius:3px; font:0.95em ui-monospace,Consolas,monospace; overflow-wrap:anywhere; }
+    label { display:block; font-weight:600; margin:16px 0 6px; }
+    textarea { display:block; resize:none; width:100%; min-height:58px; padding:14px; background:#f0ece5; color:#26221f; border:1px solid #c8bfb4; border-radius:6px; font:16px/1.6 ui-monospace,Consolas,monospace; white-space:pre; }
+    .copy-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:10px 0; }
+    .copy-status { font-size:14px; color:var(--muted); }
+    .links { list-style:none; padding:0; }
+    .links a { display:block; padding:12px 0; }
+    .links li+li { border-top:1px solid var(--line); }
+    details { border-top:1px solid var(--line); margin-top:20px; padding-top:14px; }
+    summary { cursor:pointer; font-weight:600; }
+    footer { font-size:13px; color:var(--muted); margin-top:26px; }
+    @media(max-width:500px) { main { padding:24px 16px 40px; } section { padding:22px 18px; } h2 { font-size:20px; } .actions a { width:100%; } }
+    @media print { body { background:white; } main { padding:0; } section { break-inside:avoid; } button,.copy-status { display:none; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="brand">ティータイム同好会オーダーシステム · Windows用</p>
+    <h1>このPCをLAN親機にする</h1>
+    <p>親機は、注文・売上を保存し、会計や番号表示の端末へ共有するPCです。この手順で、TeaTimeのフォルダーを受け取った方のPCを親機にできます。作成者のPCは不要です。</p>
+    <p class="intro">上から順に進めてください。コマンドは「コピー」を押し、ターミナルへ貼り付けて実行します。このHTML自体は手順書で、自動的にインストールや起動を行うものではありません。</p>
+  </header>
+
+  <section aria-labelledby="install-title">
+    <h2 id="install-title"><span class="number">1</span>Node.jsを入れる</h2>
+    <p><strong>24.14以降の24系</strong>を使います。既に導入済みなら再インストールは不要です。手順2へ進み、手順3でバージョンを確認してください。</p>
+    <div class="actions">
+      <a class="button primary" href="https://nodejs.org/dist/v24.22.0/node-v24.22.0-x64.msi" target="_blank" rel="noopener noreferrer">Windows x64版を入手</a>
+      <a class="button" href="https://nodejs.org/dist/v24.22.0/node-v24.22.0-arm64.msi" target="_blank" rel="noopener noreferrer">Windows ARM64版を入手</a>
+    </div>
+    <p class="note">Node.js公式の24.22.0インストーラーです。一般的なIntel / AMDのWindows PCはx64、ARM搭載PCはARM64です。種類は「設定 → システム → バージョン情報 → システムの種類」で確認できます。</p>
+    <ol>
+      <li>ダウンロードした <code>.msi</code> を開き、画面の案内に沿ってインストールします。管理者の承認を求められたら、このPCの所有者が確認してください。</li>
+      <li>追加のネイティブ開発ツール（Tools for Native Modules）は、このアプリには不要です。</li>
+      <li>インストール前からターミナルを開いていた場合は、閉じて開き直します。</li>
+    </ol>
+    <p class="note">別バージョンを探す場合：<a href="https://nodejs.org/dist/latest-v24.x/" target="_blank" rel="noopener noreferrer">公式の24系一覧</a>。このアプリは22系・25系・26系には対応していません。</p>
+  </section>
+
+  <section aria-labelledby="files-title">
+    <h2 id="files-title"><span class="number">2</span>TeaTimeのフォルダーを用意する</h2>
+    <ol>
+      <li>受け取ったZIPを<strong>すべて展開</strong>し、このPCの書き込み可能な場所へ置きます。ZIPの中から直接実行しません。</li>
+      <li><code>server.mjs</code> と <code>public</code>・<code>lib</code>・<code>config</code> フォルダーがあることを確認します。このHTMLだけではシステムは動きません。</li>
+      <li>新規導入では、配布元の注文を引き継がないよう <code>data</code>・<code>backups</code> を含まない一式を受け取ります。保存先はこのPCの初回起動時に作られます。既に営業で使っているフォルダーのデータは削除しないでください。</li>
+    </ol>
+    <p>このPCが注文と売上の保存先になります。別の会計端末へソースコードを配る必要はありません。</p>
+  </section>
+
+  <section aria-labelledby="launch-title">
+    <h2 id="launch-title"><span class="number">3</span>ターミナルを開いてLAN起動する</h2>
+    <ol>
+      <li>エクスプローラーでTeaTimeのフォルダーを開き、<strong><code>server.mjs</code> が見えている状態</strong>にします。</li>
+      <li>ファイルやフォルダーの上ではなく、<strong>一覧の空白部分を右クリック</strong>します。</li>
+      <li>メニューから<strong>「ターミナルで開く」</strong>を選びます。</li>
+    </ol>
+    <p>開いたターミナルで、下の①と②を順番に実行します。<strong>PowerShell・コマンドプロンプトのどちらでも同じコマンドを使えます。</strong>貼り付けは <kbd>Ctrl</kbd> + <kbd>V</kbd>、実行は <kbd>Enter</kbd> です。</p>
+    <label for="version-command">① Node.jsのバージョンを確認</label>
+    <textarea id="version-command" rows="1" readonly spellcheck="false">node --version</textarea>
+    <div class="copy-row"><button type="button" data-copy="version-command" aria-label="バージョン確認コマンドをコピー">コピー</button><span class="copy-status" id="version-command-status" role="status"></span></div>
+    <p class="note"><code>v24.14.0</code>以降の24系（例：<code>v24.22.0</code>）なら次へ進みます。</p>
+    <label for="launch-command">② このPCをLAN親機として起動</label>
+    <textarea id="launch-command" rows="1" readonly spellcheck="false">node .\server.mjs --lan</textarea>
+    <div class="copy-row"><button type="button" data-copy="launch-command" aria-label="LAN起動コマンドをコピー">コピー</button><span class="copy-status" id="launch-command-status" role="status"></span></div>
+    <p><strong>URLと「停止: Ctrl+C」が出たら起動完了です。</strong>手順4へ進みます。このターミナルは、営業が終わるまで開いたままにしてください。<code>npm install</code>・<code>.cmd</code>・<code>.ps1</code>は使いません。</p>
+    <p class="note">Windowsからネットワークへのアクセス確認が出る場合は、親機PCの所有者が営業で使うネットワークへの受信許可を確認してください。</p>
+    <details>
+      <summary>「ターミナルで開く」が見つからない場合</summary>
+      <p>スタートメニューで「PowerShell」を検索して開きます。次の例のフォルダーの場所を、<strong>このPCの <code>server.mjs</code> があるフォルダーの実際の場所</strong>に置き換えて入力してください。</p>
+      <p><code>cd "C:\実際の場所\TeaTime_OrderSystem"</code></p>
+      <p>Enterを押して移動したら、上の①と②を実行します。フォルダー名に空白があってもよいよう、場所は半角の二重引用符 <code>"</code> で囲みます。</p>
+    </details>
+  </section>
+
+  <section aria-labelledby="connect-title">
+    <h2 id="connect-title"><span class="number">4</span>親機と会計端末で画面を開く</h2>
+    <h3>このPC（新しい親機）で使う画面</h3>
+    <p class="note">以下は既定ポート3000の場合です。変更している場合は起動案内のURLを使います。</p>
+    <ul class="links">
+      <li><a href="http://127.0.0.1:3000/portal" target="_blank" rel="noopener noreferrer">端末用入口を開く</a></li>
+      <li><a href="http://127.0.0.1:3000/kitchen" target="_blank" rel="noopener noreferrer">キッチン・お渡しを開く</a></li>
+      <li><a href="http://127.0.0.1:3000/display?setup=1" target="_blank" rel="noopener noreferrer">番号表示・音声準備を開く</a></li>
+      <li><a href="http://127.0.0.1:3000/cashier" target="_blank" rel="noopener noreferrer">注文・会計を開く</a></li>
+    </ul>
+    <h3>別の会計PC・スマートフォンで使う画面</h3>
+    <ol>
+      <li>親機と同じテザリング・Wi-Fi・有線LANへ接続します。</li>
+      <li>親機のターミナルに出た<strong>「別の端末で開くリンク」→「端末用入口」</strong>のURLを、会計端末のブラウザで開きます。複数の候補が出たら、会計端末と同じネットワークのものを使います。</li>
+      <li>「接続できました」を確認し、「注文・会計へ」を選びます。</li>
+    </ol>
+    <p>会計端末にはNode.jsの導入もサーバー起動も不要です。番号表示を3台目に分ける場合も同じ入口から進み、<strong>音声は番号表示用PCだけ</strong>で開始します。</p>
+    <p class="note">別端末で <code>127.0.0.1</code> は使いません。親機のIPはPCや接続先によって変わるので、起動案内に出た値を使います。</p>
+  </section>
+
+  <section aria-labelledby="daily-title">
+    <h2 id="daily-title"><span class="number">5</span>営業中・終了・次回の起動</h2>
+    <ul>
+      <li>親機は電源につなぎ、電源を切らず・スリープさせず、ターミナルを開いたまま使います。</li>
+      <li>終了前に<strong>各会計端末</strong>で未同期0件を確認し、「管理 → 営業設定 → この端末を同期・利用終了」を実行します。その後、最終CSV・バックアップを保存します。</li>
+      <li>親機のターミナルで <kbd>Ctrl</kbd> + <kbd>C</kbd> を押します。コマンドを入力できる表示に戻ったら、ターミナルを閉じて構いません。</li>
+      <li>次回は同じTeaTimeフォルダーで「ターミナルで開く」を選び、<code>node .\server.mjs --lan</code> を実行します。Node.jsの再インストールは不要です。</li>
+    </ul>
+    <details>
+      <summary>起動・接続できない場合</summary>
+      <ul>
+        <li><strong>「nodeが見つからない」：</strong>Node.jsのインストールを確認し、ターミナルを閉じて開き直します。</li>
+        <li><strong>「server.mjsが見つからない」：</strong>そのファイルが見えるフォルダーで、空白部分を右クリックして「ターミナルで開く」を選び直します。</li>
+        <li><strong>「ポートが使用中」：</strong>既に起動しているTeaTimeを確認します。同じPCで二重に起動しません。</li>
+        <li><strong>「SQLite is an experimental feature」：</strong>URLが表示されて使えていれば、この警告だけで起動失敗ではありません。</li>
+        <li><strong>別端末だけ接続できない：</strong>同じネットワーク・正しい親機IP・受信許可を確認します。学校Wi-Fiで端末間通信が遮断される場合は、確認済みのテザリングなどを使います。</li>
+        <li><strong>Node.js自体がブロックされる：</strong>このPCの所有者・管理者に利用可否を確認します。HTMLへまとめてもPC側の制限は変わりません。</li>
+      </ul>
+    </details>
+  </section>
+  <noscript><p>コピー用ボタンはJavaScriptを使います。無効の場合も、各コマンドを選択してCtrl+Cでコピーできます。</p></noscript>
+  <footer>2026-10-18作成。ダウンロード先はNode.js公式配布元で確認。動作確認環境はWindows・Node.js 24.14.1です。配布先のPC・ネットワークでは当日の機器で確認してください。このHTMLの表示にサーバーは不要です。</footer>
+</main>
+<script>
+  for (const button of document.querySelectorAll('[data-copy]')) {
+    button.addEventListener('click', () => {
+      const field = document.getElementById(button.dataset.copy);
+      const status = document.getElementById(button.dataset.copy + '-status');
+      field.focus();
+      field.select();
+      field.setSelectionRange(0, field.value.length);
+      let copied = false;
+      try { copied = document.execCommand('copy'); } catch {}
+      status.textContent = copied ? 'コピーしました。ターミナルへ貼り付け、Enterを押してください。' : 'コマンドを選択しました。Ctrl+Cでコピーしてください。';
+    });
+  }
+</script>
+</body>
+</html>
